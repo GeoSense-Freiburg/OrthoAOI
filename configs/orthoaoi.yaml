@@ -1,20 +1,20 @@
 # Default configuration for AOI segmentation with DINOv3
-train_images: null
-train_annotations: null
-val_images: null
-val_annotations: null
+train_images: data/splits/train.csv
+train_masks: data/splits/train.csv
+val_images: data/splits/val.csv
+val_masks: data/splits/val.csv
 predict_images: null
 predict_output: predictions
 
-backbone: dinov3_vits16
-backbone_repo: facebookresearch/dinov3
+backbone: dinov2_vits14
+backbone_repo: facebookresearch/dinov2
 backbone_source: github
 backbone_weights: null
 
 epochs: 30
 freeze_epochs: 5
 batch_size: 8
-tile_size: 518
+tile_size: 512
 lr_head: 0.001
 lr_backbone: 0.0001
 weight_decay: 0.0001
