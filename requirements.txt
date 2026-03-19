@@ -3,5 +3,4 @@ torchvision
 pytorch-lightning
 numpy
 pillow
-pycocotools
 PyYAML

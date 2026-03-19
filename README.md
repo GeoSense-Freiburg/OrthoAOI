@@ -2,70 +2,54 @@
 This project uses self-supervised DINO models trained on existing Areas of Interest (AOIs) to learn spatial and semantic patterns in orthomosaics and automatically predict meaningful AOIs in new, unseen orthos. The goal is to scale AOI discovery across large UAV datasets with minimal manual annotation.
 
 ## DINOv3 AOI Segmentation (PyTorch Lightning)
-Use `main_orthoaoi.py` to train a DINOv3 backbone with a lightweight segmentation head on COCO-style AOI labels.
+Use `python main.py` to train with the default config in `configs/aoi_segmentation_train.yaml`.
+
+### Project layout
+- `main.py`: entrypoint for train and predict
+- `script/`: model, data, and utility code
+- `configs/`: training and prediction configs
+- `models/`: pretrained DINOv3 checkpoint
+- `data/splits/`: CSV manifests used by the default training config
 
 ### Features
-- Loads pretrained DINOv3 backbones via `torch.hub` using official weights.
-- Accepts a URL for weights; downloads them into `models/` automatically.
+- Loads a DINOv3 backbone with a lightweight segmentation head.
+- Uses a local `.pth` checkpoint by default.
 - Uses a minimal segmentation head (Conv + upsample).
-- Expects COCO-style image + annotation JSON for train/validation datasets.
-- Builds binary AOI masks from polygon or RLE segmentation labels.
+- Trains from either CSV manifests (`image,mask`) or paired image/mask folders.
+- Loads binary AOI masks directly from mask images.
 - Trains with BCEWithLogitsLoss.
 - Freezes the DINO backbone for warmup epochs, then unfreezes for fine-tuning.
-- Uses Lightning checkpoints (best by `val_loss`).
-- Optionally predicts AOI masks on new orthomosaic images after training.
+- Writes runtime outputs under `/tmp/script`.
 
 ### Example config-driven run
-Edit `configs/orthoaoi.yaml` with your dataset paths and DINOv3 weights URL (from the access email).
+Edit `configs/aoi_segmentation_train.yaml` with your dataset manifest paths and DINOv3 checkpoint path.
 
 ```yaml
-train_images: data/train/images
-train_annotations: data/train/annotations.json
-val_images: data/val/images
-val_annotations: data/val/annotations.json
-backbone_weights: https://<your-signed-url>
+data:
+  train_images: data/splits/train.csv
+  val_images: data/splits/val.csv
+model:
+  backbone_name: dinov3_vits16plus
+  backbone_weights: /absolute/path/to/dinov3_vits16plus_pretrain_lvd1689m-4057cbaa.pth
 ```
 
 Then run:
 ```bash
-python main_orthoaoi.py --config configs/orthoaoi.yaml
+python main.py
 ```
 
-The weights URL will be downloaded into `models/` automatically.
-After training, the config is updated with `checkpoint` and `checkpoint_last` paths.
-
-### One-shot config helper
-You can populate or update `configs/orthoaoi.yaml` from the CLI:
+### Prediction
+Edit `configs/aoi_segmentation_predict.yaml` or set `data.predict_images` and `predict.checkpoint_path`, then run:
 
 ```bash
-python scripts/update_config.py \
-  --train-images data/train/images \
-  --train-annotations data/train/annotations.json \
-  --val-images data/val/images \
-  --val-annotations data/val/annotations.json \
-  --backbone-weights https://<your-signed-url>
+python main.py configs/aoi_segmentation_predict.yaml predict
 ```
 
-### CLI override example
-```bash
-python main_orthoaoi.py \
-  --config configs/orthoaoi.yaml \
-  --epochs 10 \
-  --batch-size 4 \
-  --predict-images data/test/orthos \
-  --predict-output outputs/test_masks
-```
-
-### Separate prediction script
-```bash
-python predict_orthoaoi.py \
-  --config configs/orthoaoi.yaml \
-  --checkpoint-best \
-  --predict-images data/test/orthos \
-  --predict-output outputs/test_masks
-```
+Predicted masks are written to `predict.output_dir`.
 
 ### Notes
 - Install dependencies from `requirements.txt`.
-- DINOv3 weights are accessed via signed URLs (time-limited). If downloads fail, request a fresh URL.
-- Keep tile sizes aligned with DINO patching (`14`-pixel patch size) for best results.
+- Local weight files must exist and be non-empty.
+- Training defaults to CSV manifests in `data/splits/*.csv`, which is faster than recursively scanning image folders.
+- Runtime logs and checkpoints are written under `/tmp/script` by default.
+- Keep tile sizes aligned with the backbone patch size. For `dinov3_vits16plus`, use multiples of `16`.

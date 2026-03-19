@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+.cache/
+lightning_logs/
+/tmp/orthoaoi/
+
+predictions/
+
+# Local model weights and training artifacts
+models/*.pth
+models/*.pt
+models/*.ckpt

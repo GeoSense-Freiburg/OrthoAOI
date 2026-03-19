@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import importlib
 import math
+from pathlib import Path
+import sys
 from typing import Any, Dict, Tuple
 
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from .utils import resolve_weights
 
 
 class DINOv3AOISegmenter(pl.LightningModule):
@@ -19,22 +24,47 @@ class DINOv3AOISegmenter(pl.LightningModule):
         backbone_name: str,
         backbone_repo: str,
         backbone_source: str,
-        backbone_weights: str,
+        backbone_weights: str | None,
         lr_head: float,
         lr_backbone: float,
         weight_decay: float,
         freeze_epochs: int,
         threshold: float,
+        models_dir: str = "models",
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
 
-        self.backbone = torch.hub.load(
-            backbone_repo,
-            backbone_name,
-            source=backbone_source,
-            weights=backbone_weights,
-        )
+        weights_path = resolve_weights(backbone_weights, models_dir)
+        models_path = Path(models_dir)
+        models_path.mkdir(parents=True, exist_ok=True)
+        default_weights = models_path / f"{backbone_name}.pth"
+
+        if weights_path is None and default_weights.exists():
+            weights_path = str(default_weights)
+            print(f"Using cached backbone weights: {weights_path}")
+
+        if weights_path:
+            self.backbone, loaded_by_hub = self._load_backbone(
+                backbone_repo,
+                backbone_name,
+                backbone_source,
+                pretrained=False,
+                weights=weights_path,
+            )
+            if not loaded_by_hub:
+                state = torch.load(weights_path, map_location="cpu")
+                self.backbone.load_state_dict(state, strict=False)
+        else:
+            self.backbone, _ = self._load_backbone(
+                backbone_repo,
+                backbone_name,
+                backbone_source,
+                pretrained=True,
+                weights=None,
+            )
+            torch.save(self.backbone.state_dict(), default_weights)
+            print(f"Saved pretrained backbone weights to: {default_weights}")
 
         self.patch_size = self._get_patch_size(self.backbone)
         self.embed_dim = self._get_embed_dim(self.backbone)
@@ -64,6 +94,108 @@ class DINOv3AOISegmenter(pl.LightningModule):
         if hasattr(backbone, "num_features"):
             return int(backbone.num_features)
         raise ValueError("Unable to infer DINOv3 embedding dimension.")
+
+    @staticmethod
+    def _load_backbone(
+        backbone_repo: str,
+        backbone_name: str,
+        backbone_source: str,
+        pretrained: bool,
+        weights: str | None,
+    ) -> tuple[nn.Module, bool]:
+        if weights is not None:
+            try:
+                return (
+                    torch.hub.load(
+                        backbone_repo,
+                        backbone_name,
+                        source=backbone_source,
+                        weights=weights,
+                        pretrained=pretrained,
+                    ),
+                    True,
+                )
+            except TypeError:
+                try:
+                    return (
+                        torch.hub.load(
+                            backbone_repo,
+                            backbone_name,
+                            source=backbone_source,
+                            weights=weights,
+                        ),
+                        True,
+                    )
+                except TypeError:
+                    pass
+            except ImportError:
+                pass
+        try:
+            return (
+                torch.hub.load(
+                    backbone_repo,
+                    backbone_name,
+                    source=backbone_source,
+                    pretrained=pretrained,
+                ),
+                False,
+            )
+        except (TypeError, ImportError):
+            try:
+                return (
+                    torch.hub.load(
+                        backbone_repo,
+                        backbone_name,
+                        source=backbone_source,
+                    ),
+                    False,
+                )
+            except ImportError:
+                pass
+
+        if "dinov3" in backbone_repo and backbone_name.startswith("dinov3_"):
+            return (
+                DINOv3AOISegmenter._load_dinov3_backbone_direct(
+                    backbone_repo=backbone_repo,
+                    backbone_name=backbone_name,
+                    backbone_source=backbone_source,
+                    pretrained=pretrained,
+                    weights=weights,
+                ),
+                True,
+            )
+
+        raise RuntimeError(
+            f"Unable to load backbone '{backbone_name}' from '{backbone_repo}'"
+        )
+
+    @staticmethod
+    def _load_dinov3_backbone_direct(
+        backbone_repo: str,
+        backbone_name: str,
+        backbone_source: str,
+        pretrained: bool,
+        weights: str | None,
+    ) -> nn.Module:
+        if backbone_source == "local":
+            repo_path = Path(backbone_repo)
+        else:
+            repo_path = Path(torch.hub.get_dir()) / "facebookresearch_dinov3_main"
+
+        if not repo_path.exists():
+            raise FileNotFoundError(f"DINOv3 repo cache not found: {repo_path}")
+
+        sys.path.insert(0, str(repo_path))
+        try:
+            backbones_module = importlib.import_module("dinov3.hub.backbones")
+            constructor = getattr(backbones_module, backbone_name)
+            kwargs: dict[str, Any] = {"pretrained": pretrained}
+            if weights is not None:
+                kwargs["weights"] = weights
+            return constructor(**kwargs)
+        finally:
+            if sys.path and sys.path[0] == str(repo_path):
+                sys.path.pop(0)
 
     def _set_backbone_trainable(self, trainable: bool) -> None:
         for param in self.backbone.parameters():
